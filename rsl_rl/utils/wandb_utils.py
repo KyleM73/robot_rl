@@ -47,6 +47,7 @@ class WandbSummaryWriter(SummaryWriter):
         wandb.log({"log_dir": run_name})
 
         self.saved_videos = {}
+        self.fps = 30
 
     def store_config(self, env_cfg, runner_cfg, alg_cfg, policy_cfg):
         wandb.config.update({"runner_cfg": runner_cfg})
@@ -75,6 +76,8 @@ class WandbSummaryWriter(SummaryWriter):
 
     def log_config(self, env_cfg, runner_cfg, alg_cfg, policy_cfg):
         self.store_config(env_cfg, runner_cfg, alg_cfg, policy_cfg)
+        env_cfg_dict = asdict(env_cfg)
+        self.fps = env_cfg_dict["decimation"] * env_cfg_dict["sim"]["dt"]
 
     def save_model(self, model_path, iter):
         wandb.save(model_path, base_path=os.path.dirname(model_path))
@@ -100,7 +103,7 @@ class WandbSummaryWriter(SummaryWriter):
                 elif video_info["size"] == video_size_kb and video_size_kb > 100:
                     # wait 10 steps after recording has been completed
                     if video_info["steps"] > 10:
-                        self.add_video(video_name, fps=30, log_name=log_name)
+                        self.add_video(video_name, fps=self.fps, log_name=log_name)
                         self.saved_videos[video_name]["recorded"] = True
                     else:
                         video_info["steps"] += 1
@@ -113,3 +116,6 @@ class WandbSummaryWriter(SummaryWriter):
 
     def callback(self, step):
         self.log_video_files()
+
+    def set_fps(self, fps):
+        self.fps = fps
