@@ -85,7 +85,7 @@ class WandbSummaryWriter(SummaryWriter):
     def save_file(self, path, iter=None):
         wandb.save(path, base_path=os.path.dirname(path))
 
-    def log_video_files(self, log_name: str = "Video", video_subdir: str | None = None):
+    def log_video_files(self, log_name: str = "Video", video_subdir: str | None = "videos"):
         if video_subdir is not None:
             video_dir = pathlib.Path(os.path.join(self.log_dir, video_subdir))
         else:
