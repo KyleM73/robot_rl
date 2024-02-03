@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict
+import pathlib
 from torch.utils.tensorboard import SummaryWriter
 
 try:
@@ -45,6 +46,8 @@ class WandbSummaryWriter(SummaryWriter):
 
         wandb.log({"log_dir": run_name})
 
+        self.saved_videos = {}
+
     def store_config(self, env_cfg, runner_cfg, alg_cfg, policy_cfg):
         wandb.config.update({"runner_cfg": runner_cfg})
         wandb.config.update({"policy_cfg": policy_cfg})
@@ -78,3 +81,35 @@ class WandbSummaryWriter(SummaryWriter):
 
     def save_file(self, path, iter=None):
         wandb.save(path, base_path=os.path.dirname(path))
+
+    def log_video_files(self, log_name: str = "Video", video_subdir: str | None = None):
+        if video_subdir is not None:
+            video_dir = pathlib.Path(os.path.join(self.log_dir, video_subdir))
+        else:
+            video_dir = pathlib.Path(self.log_dir)
+        videos = list(video_dir.rglob("*.mp4"))
+        for video in videos:
+            video_name = str(video)
+            video_size_kb = os.stat(video_name).st_size / 1024
+            if video_name not in self.saved_videos.keys():
+                self.saved_videos[video_name] = {"size": video_size_kb, "recorded": False, "steps": 0}
+            else:
+                video_info = self.saved_videos[video_name]
+                if video_info["recorded"]:
+                    continue
+                elif video_info["size"] == video_size_kb and video_size_kb > 100:
+                    # wait 10 steps after recording has been completed
+                    if video_info["steps"] > 10:
+                        self.add_video(video_name, fps=30, log_name=log_name)
+                        self.saved_videos[video_name]["recorded"] = True
+                    else:
+                        video_info["steps"] += 1
+                else:
+                    self.saved_videos[video_name]["size"] = video_size_kb
+                    self.saved_videos[video_name]["steps"] = 0
+    
+    def add_video(self, video_path: str, fps: int = 30, log_name: str = "Video"):
+        wandb.log({log_name: wandb.Video(video_path, fps=fps)})
+
+    def callback(self, step):
+        self.log_video_files()
