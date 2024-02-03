@@ -77,7 +77,7 @@ class WandbSummaryWriter(SummaryWriter):
     def log_config(self, env_cfg, runner_cfg, alg_cfg, policy_cfg):
         self.store_config(env_cfg, runner_cfg, alg_cfg, policy_cfg)
         env_cfg_dict = asdict(env_cfg)
-        self.fps = env_cfg_dict["decimation"] * env_cfg_dict["sim"]["dt"]
+        self.fps = 1 / (env_cfg_dict["decimation"] * env_cfg_dict["sim"]["dt"])
 
     def save_model(self, model_path, iter):
         wandb.save(model_path, base_path=os.path.dirname(model_path))
