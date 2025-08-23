@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal
 
+from robot_rl.networks import MLP, EmpiricalNormalization
+
 from robot_rl.utils import resolve_nn_activation
 
 class MHAEncoder(nn.Module):
@@ -59,23 +61,13 @@ class MHAEncoder(nn.Module):
 
         return z, (weights if need_weights else None)
 
-def mlp(in_dim: int, out_dim: int, hidden: list[int], activation: str) -> nn.Sequential:
-    layers = []
-    last = in_dim
-    for h in hidden:
-        layers += [nn.Linear(last, h)]
-        layers += [resolve_nn_activation(activation)]
-        last = h
-    layers += [nn.Linear(last, out_dim)]
-    return nn.Sequential(*layers)
-
 class ActorCriticMHA(nn.Module):
     is_recurrent = False
 
     def __init__(
         self,
-        num_actor_obs,
-        num_critic_obs,
+        obs,
+        obs_groups,
         num_actions,
         n_latent: int,
         n_heads: int,
@@ -84,6 +76,8 @@ class ActorCriticMHA(nn.Module):
         n_rows: int,
         n_cols: int,
         dropout: float = 0,
+        actor_obs_normalization=False,
+        critic_obs_normalization=False,
         actor_hidden_dims=[256, 256, 256],
         critic_hidden_dims=[256, 256, 256],
         activation="relu",
@@ -97,6 +91,18 @@ class ActorCriticMHA(nn.Module):
                 + str([key for key in kwargs.keys()])
             )
         super().__init__()
+
+        # get the observation dimensions
+        self.obs_groups = obs_groups
+        num_actor_obs = 0
+        for obs_group in obs_groups["policy"]:
+            assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
+            num_actor_obs += obs[obs_group].shape[-1]
+        num_critic_obs = 0
+        for obs_group in obs_groups["critic"]:
+            assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
+            num_critic_obs += obs[obs_group].shape[-1]
+
         d_proprio = num_actor_obs - (n_rows * n_cols * 3)
         d_enc = n_latent + d_proprio
         self.encoder = MHAEncoder(
@@ -108,15 +114,29 @@ class ActorCriticMHA(nn.Module):
             dropout,
             activation
         )
+        print(f"MHA Encoder: {self.encoder}")
 
-        self.actor_head = mlp(d_enc, num_actions, actor_hidden_dims, activation)
-        self.critic_head = mlp(d_enc, 1, critic_hidden_dims, activation)
+        self.actor = MLP(d_enc, num_actions, actor_hidden_dims, activation)
+        # actor observation normalization
+        self.actor_obs_normalization = actor_obs_normalization
+        if actor_obs_normalization:
+            self.actor_obs_normalizer = EmpiricalNormalization(num_actor_obs)
+        else:
+            self.actor_obs_normalizer = torch.nn.Identity()
+        print(f"Actor MLP: {self.actor}")
+
+        # critic
+        self.critic = MLP(d_enc, 1, critic_hidden_dims, activation)
+        # critic observation normalization
+        self.critic_obs_normalization = critic_obs_normalization
+        if critic_obs_normalization:
+            self.critic_obs_normalizer = EmpiricalNormalization(num_critic_obs)
+        else:
+            self.critic_obs_normalizer = torch.nn.Identity()
+        print(f"Critic MLP: {self.critic}")
+
         self.l = n_rows
         self.w = n_cols
-
-        print(f"MHA Encoder: {self.encoder}")
-        print(f"Actor MLP: {self.actor_head}")
-        print(f"Critic MLP: {self.critic_head}")
 
         # Action noise
         self.noise_std_type = noise_std_type
@@ -133,14 +153,6 @@ class ActorCriticMHA(nn.Module):
         Normal.set_default_validate_args(False)
         # attention weight heatmap
         self.weights = None
-
-    @staticmethod
-    # not used at the moment
-    def init_weights(sequential, scales):
-        [
-            torch.nn.init.orthogonal_(module.weight, gain=scales[idx])
-            for idx, module in enumerate(mod for mod in sequential if isinstance(mod, nn.Linear))
-        ]
 
     def reset(self, dones=None):
         pass
@@ -166,12 +178,12 @@ class ActorCriticMHA(nn.Module):
         _, weights = self.encoder(proprio_obs, map_obs, need_weights=True)
         return weights
 
-    def update_distribution(self, observations, need_weights: bool = False):
+    def update_distribution(self, obs, need_weights: bool = False):
         # compute mean
-        proprio_obs = observations[:, :-self.w * self.l * 3]
-        map_obs = observations[:, -self.w * self.l * 3:].view(-1, self.l, self.w, 3)
+        proprio_obs = obs[:, :-self.w * self.l * 3]
+        map_obs = obs[:, -self.w * self.l * 3:].view(-1, self.l, self.w, 3)
         z, self.weights = self.encoder(proprio_obs, map_obs, need_weights=False)
-        mean = self.actor_head(z)
+        mean = self.actor(z)
         # compute standard deviation
         if self.noise_std_type == "scalar":
             std = self.std.expand_as(mean)
@@ -182,33 +194,58 @@ class ActorCriticMHA(nn.Module):
         # create distribution
         self.distribution = Normal(mean, std)
 
-    def act(self, observations, **kwargs):
-        self.update_distribution(observations)
+    def act(self, obs, **kwargs):
+        obs = self.get_actor_obs(obs)
+        obs = self.actor_obs_normalizer(obs)
+        self.update_distribution(obs)
         return self.distribution.sample()
+
+    def act_inference(self, obs):
+        obs = self.get_actor_obs(obs)
+        obs = self.actor_obs_normalizer(obs)
+        proprio_obs = obs[:, :-self.w * self.l * 3]
+        map_obs = obs[:, -self.w * self.l * 3:].view(-1, self.l, self.w, 3)
+        z, _ = self.encoder(proprio_obs, map_obs, need_weights=False)
+        return self.actor(z)
+
+    def act_inference_vis(self, obs):
+        obs = self.get_actor_obs(obs)
+        obs = self.actor_obs_normalizer(obs)
+        proprio_obs = obs[:, :-self.w * self.l * 3]
+        map_obs = obs[:, -self.w * self.l * 3:].view(-1, self.l, self.w, 3)
+        z, weights = self.encoder(proprio_obs, map_obs, need_weights=True)
+        return self.actor(z), weights
+
+    def evaluate(self, obs, **kwargs):
+        obs = self.get_critic_obs(obs)
+        obs = self.critic_obs_normalizer(obs)
+        proprio_obs = obs[:, :-self.w * self.l * 3]
+        map_obs = obs[:, -self.w * self.l * 3:].view(-1, self.l, self.w, 3)
+        z, _ = self.encoder(proprio_obs, map_obs, need_weights=False)
+        return self.critic(z)
+
+    def get_actor_obs(self, obs):
+        obs_list = []
+        for obs_group in self.obs_groups["policy"]:
+            obs_list.append(obs[obs_group])
+        return torch.cat(obs_list, dim=-1)
+
+    def get_critic_obs(self, obs):
+        obs_list = []
+        for obs_group in self.obs_groups["critic"]:
+            obs_list.append(obs[obs_group])
+        return torch.cat(obs_list, dim=-1)
 
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
-    def act_inference(self, observations):
-        proprio_obs = observations[:, :-self.w * self.l * 3]
-        map_obs = observations[:, -self.w * self.l * 3:].view(-1, self.l, self.w, 3)
-        z, _ = self.encoder(proprio_obs, map_obs, need_weights=False)
-        actions_mean = self.actor_head(z)
-        return actions_mean
-
-    def act_inference_vis(self, observations):
-        proprio_obs = observations[:, :-self.w * self.l * 3]
-        map_obs = observations[:, -self.w * self.l * 3:].view(-1, self.l, self.w, 3)
-        z, weights = self.encoder(proprio_obs, map_obs, need_weights=True)
-        actions_mean = self.actor_head(z)
-        return actions_mean, weights
-
-    def evaluate(self, critic_observations, **kwargs):
-        proprio_obs = critic_observations[:, :-self.w * self.l * 3]
-        map_obs = critic_observations[:, -self.w * self.l * 3:].view(-1, self.l, self.w, 3)
-        z, _ = self.encoder(proprio_obs, map_obs, need_weights=False)
-        value = self.critic_head(z)
-        return value
+    def update_normalization(self, obs):
+        if self.actor_obs_normalization:
+            actor_obs = self.get_actor_obs(obs)
+            self.actor_obs_normalizer.update(actor_obs)
+        if self.critic_obs_normalization:
+            critic_obs = self.get_critic_obs(obs)
+            self.critic_obs_normalizer.update(critic_obs)
 
     def load_state_dict(self, state_dict, strict=True):
         """Load the parameters of the actor-critic model.
@@ -224,7 +261,7 @@ class ActorCriticMHA(nn.Module):
         """
 
         super().load_state_dict(state_dict, strict=strict)
-        return True
+        return True  # training resumes
 
 if __name__ == "__main__":
     num_actor_obs = 48
