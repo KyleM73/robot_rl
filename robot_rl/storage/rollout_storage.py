@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import torch
+from tensordict import TensorDict
 
 from robot_rl.utils import split_and_pad_trajectories
 
@@ -14,7 +15,6 @@ class RolloutStorage:
     class Transition:
         def __init__(self):
             self.observations = None
-            self.privileged_observations = None
             self.actions = None
             self.privileged_actions = None
             self.rewards = None
@@ -35,8 +35,7 @@ class RolloutStorage:
         training_type,
         num_envs,
         num_transitions_per_env,
-        obs_shape,
-        privileged_obs_shape,
+        obs,
         actions_shape,
         rnd_state_shape=None,
         estimator_shape=None,
@@ -47,20 +46,15 @@ class RolloutStorage:
         self.device = device
         self.num_transitions_per_env = num_transitions_per_env
         self.num_envs = num_envs
-        self.obs_shape = obs_shape
-        self.privileged_obs_shape = privileged_obs_shape
-        self.rnd_state_shape = rnd_state_shape
         self.actions_shape = actions_shape
         self.estimator_shape = estimator_shape
 
         # Core
-        self.observations = torch.zeros(num_transitions_per_env, num_envs, *obs_shape, device=self.device)
-        if privileged_obs_shape is not None:
-            self.privileged_observations = torch.zeros(
-                num_transitions_per_env, num_envs, *privileged_obs_shape, device=self.device
-            )
-        else:
-            self.privileged_observations = None
+        self.observations = TensorDict(
+            {key: torch.zeros(num_transitions_per_env, *value.shape, device=device) for key, value in obs.items()},
+            batch_size=[num_transitions_per_env, num_envs],
+            device=self.device,
+        )
         self.rewards = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
         self.actions = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
         self.dones = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device).byte()
@@ -100,8 +94,6 @@ class RolloutStorage:
 
         # Core
         self.observations[self.step].copy_(transition.observations)
-        if self.privileged_observations is not None:
-            self.privileged_observations[self.step].copy_(transition.privileged_observations)
         self.actions[self.step].copy_(transition.actions)
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
         self.dones[self.step].copy_(transition.dones.view(-1, 1))
@@ -183,13 +175,7 @@ class RolloutStorage:
             raise ValueError("This function is only available for distillation training.")
 
         for i in range(self.num_transitions_per_env):
-            if self.privileged_observations is not None:
-                privileged_observations = self.privileged_observations[i]
-            else:
-                privileged_observations = self.observations[i]
-            yield self.observations[i], privileged_observations, self.actions[i], self.privileged_actions[
-                i
-            ], self.dones[i]
+            yield self.observations[i], self.actions[i], self.privileged_actions[i], self.dones[i]
 
     # for reinforcement learning with feedforward networks
     def mini_batch_generator(self, num_mini_batches, num_epochs=8):
@@ -201,11 +187,6 @@ class RolloutStorage:
 
         # Core
         observations = self.observations.flatten(0, 1)
-        if self.privileged_observations is not None:
-            privileged_observations = self.privileged_observations.flatten(0, 1)
-        else:
-            privileged_observations = observations
-
         actions = self.actions.flatten(0, 1)
         values = self.values.flatten(0, 1)
         returns = self.returns.flatten(0, 1)
@@ -234,7 +215,6 @@ class RolloutStorage:
                 # Create the mini-batch
                 # -- Core
                 obs_batch = observations[batch_idx]
-                privileged_observations_batch = privileged_observations[batch_idx]
                 actions_batch = actions[batch_idx]
 
                 # -- For PPO
@@ -258,7 +238,7 @@ class RolloutStorage:
                     estimate_batch = None
 
                 # yield the mini-batch
-                yield obs_batch, privileged_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
+                yield obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
                     None,
                     None,
                 ), None, rnd_state_batch, estimate_batch
@@ -339,7 +319,7 @@ class RolloutStorage:
                 hid_a_batch = hid_a_batch[0] if len(hid_a_batch) == 1 else hid_a_batch
                 hid_c_batch = hid_c_batch[0] if len(hid_c_batch) == 1 else hid_c_batch
 
-                yield obs_batch, privileged_obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
+                yield obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
                     hid_a_batch,
                     hid_c_batch,
                 ), masks_batch, rnd_state_batch, estimate_batch

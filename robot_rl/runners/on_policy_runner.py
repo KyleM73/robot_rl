@@ -6,6 +6,7 @@ import os
 import statistics
 import time
 import torch
+import warnings
 from collections import deque
 
 import robot_rl
@@ -19,12 +20,14 @@ from robot_rl.modules import (
     EmpiricalNormalization,
     StudentTeacher,
     StudentTeacherRecurrent,
+    resolve_rnd_config,
+    resolve_symmetry_config,
 )
-from robot_rl.utils import store_code_state
+from robot_rl.utils import resolve_obs_groups, store_code_state
 
 
 class OnPolicyRunner:
-    """On-policy runner for training and evaluation."""
+    """On-policy runner for training and evaluation of actor-critic methods."""
 
     def __init__(self, env: VecEnv, train_cfg: dict, log_dir: str | None = None, device="cpu"):
         self.cfg = train_cfg
@@ -154,6 +157,7 @@ class OnPolicyRunner:
         # Decide whether to disable logging
         # We only log from the process with rank 0 (main process)
         self.disable_logs = self.is_distributed and self.gpu_global_rank != 0
+
         # Logging
         self.log_dir = log_dir
         self.writer = None
@@ -232,8 +236,6 @@ class OnPolicyRunner:
         if self.is_distributed:
             print(f"Synchronizing parameters for rank {self.gpu_global_rank}...")
             self.alg.broadcast_parameters()
-            # TODO: Do we need to synchronize empirical normalizers?
-            #   Right now: No, because they all should converge to the same values "asymptotically".
 
         # Start training
         start_iter = self.current_learning_iteration
@@ -271,17 +273,15 @@ class OnPolicyRunner:
                     next_obs = self.obs_normalizer(next_obs)
 
                     # process the step
-                    self.alg.process_env_step(rewards, dones, infos)
-
+                    self.alg.process_env_step(obs, rewards, dones, extras)
                     # Extract intrinsic rewards (only for logging)
                     intrinsic_rewards = self.alg.intrinsic_rewards if self.alg.rnd else None
-
                     # book keeping
                     if self.log_dir is not None:
-                        if "episode" in infos:
-                            ep_infos.append(infos["episode"])
-                        elif "log" in infos:
-                            ep_infos.append(infos["log"])
+                        if "episode" in extras:
+                            ep_infos.append(extras["episode"])
+                        elif "log" in extras:
+                            ep_infos.append(extras["log"])
                         # Update rewards
                         if self.alg.rnd:
                             cur_ereward_sum += rewards
@@ -310,8 +310,7 @@ class OnPolicyRunner:
                 start = stop
 
                 # compute returns
-                if self.training_type == "rl":
-                    self.alg.compute_returns(privileged_obs)
+                self.alg.compute_returns(obs)
 
             # update policy
             loss_dict, error_dict = self.alg.update(self.num_estimates_all)
@@ -395,7 +394,7 @@ class OnPolicyRunner:
         # -- Training
         if len(locs["rewbuffer"]) > 0:
             # separate logging for intrinsic and extrinsic rewards
-            if self.alg.rnd:
+            if hasattr(self.alg, "rnd") and self.alg.rnd:
                 self.writer.add_scalar("Rnd/mean_extrinsic_reward", statistics.mean(locs["erewbuffer"]), locs["it"])
                 self.writer.add_scalar("Rnd/mean_intrinsic_reward", statistics.mean(locs["irewbuffer"]), locs["it"])
                 self.writer.add_scalar("Rnd/weight", self.alg.rnd.weight, locs["it"])
@@ -426,7 +425,7 @@ class OnPolicyRunner:
             for key, value in locs["loss_dict"].items():
                 log_string += f"""{f"Mean {key} loss:":>{pad}} {value:.4f}\n"""
             # -- Rewards
-            if self.alg.rnd:
+            if hasattr(self.alg, "rnd") and self.alg.rnd:
                 log_string += (
                     f"""{"Mean extrinsic reward:":>{pad}} {statistics.mean(locs["erewbuffer"]):.2f}\n"""
                     f"""{"Mean intrinsic reward:":>{pad}} {statistics.mean(locs["irewbuffer"]):.2f}\n"""
@@ -473,7 +472,7 @@ class OnPolicyRunner:
             "infos": infos,
         }
         # -- Save RND model if used
-        if self.alg.rnd:
+        if hasattr(self.alg, "rnd") and self.alg.rnd:
             saved_dict["rnd_state_dict"] = self.alg.rnd.state_dict()
             saved_dict["rnd_optimizer_state_dict"] = self.alg.rnd_optimizer.state_dict()
         # -- Save observation normalizer if used
@@ -490,31 +489,19 @@ class OnPolicyRunner:
         if self.logger_type in ["neptune", "wandb"] and not self.disable_logs:
             self.writer.save_model(path, self.current_learning_iteration)
 
-    def load(self, path: str, load_optimizer: bool = True):
-        loaded_dict = torch.load(path, weights_only=False)
+    def load(self, path: str, load_optimizer: bool = True, map_location: str | None = None):
+        loaded_dict = torch.load(path, weights_only=False, map_location=map_location)
         # -- Load model
         resumed_training = self.alg.policy.load_state_dict(loaded_dict["model_state_dict"])
         # -- Load RND model if used
-        if self.alg.rnd:
+        if hasattr(self.alg, "rnd") and self.alg.rnd:
             self.alg.rnd.load_state_dict(loaded_dict["rnd_state_dict"])
-        # -- Load observation normalizer if used
-        if self.empirical_normalization:
-            if resumed_training:
-                # if a previous training is resumed, the actor/student normalizer is loaded for the actor/student
-                # and the critic/teacher normalizer is loaded for the critic/teacher
-                self.obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
-                self.privileged_obs_normalizer.load_state_dict(loaded_dict["privileged_obs_norm_state_dict"])
-            else:
-                # if the training is not resumed but a model is loaded, this run must be distillation training following
-                # an rl training. Thus the actor normalizer is loaded for the teacher model. The student's normalizer
-                # is not loaded, as the observation space could differ from the previous rl training.
-                self.privileged_obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
         # -- load optimizer if used
         if load_optimizer and resumed_training:
             # -- algorithm optimizer
             self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
             # -- RND optimizer if used
-            if self.alg.rnd:
+            if hasattr(self.alg, "rnd") and self.alg.rnd:
                 self.alg.rnd_optimizer.load_state_dict(loaded_dict["rnd_optimizer_state_dict"])
         # -- load current learning iteration
         if resumed_training:
@@ -527,12 +514,7 @@ class OnPolicyRunner:
         self.eval_mode()  # switch to evaluation mode (dropout for example)
         if device is not None:
             self.alg.policy.to(device)
-        policy = self.alg.policy.act_inference
-        if self.cfg["empirical_normalization"]:
-            if device is not None:
-                self.obs_normalizer.to(device)
-            policy = lambda x: self.alg.policy.act_inference(self.obs_normalizer(x))  # noqa: E731
-        return policy
+        return self.alg.policy.act_inference
 
     def get_inference_estimator(self, unnorm=True, device=None) -> Callable:
         if not self.alg_cfg["estimator"]:
@@ -559,7 +541,7 @@ class OnPolicyRunner:
         # -- PPO
         self.alg.policy.train()
         # -- RND
-        if self.alg.rnd:
+        if hasattr(self.alg, "rnd") and self.alg.rnd:
             self.alg.rnd.train()
         # -- Normalization
         if self.empirical_normalization:
@@ -572,7 +554,7 @@ class OnPolicyRunner:
         # -- PPO
         self.alg.policy.eval()
         # -- RND
-        if self.alg.rnd:
+        if hasattr(self.alg, "rnd") and self.alg.rnd:
             self.alg.rnd.eval()
         # -- Normalization
         if self.empirical_normalization:
@@ -631,3 +613,68 @@ class OnPolicyRunner:
         torch.distributed.init_process_group(backend="nccl", rank=self.gpu_global_rank, world_size=self.gpu_world_size)
         # set device to the local rank
         torch.cuda.set_device(self.gpu_local_rank)
+
+    def _construct_algorithm(self, obs) -> PPO:
+        """Construct the actor-critic algorithm."""
+        # resolve RND config
+        self.alg_cfg = resolve_rnd_config(self.alg_cfg, obs, self.cfg["obs_groups"], self.env)
+
+        # resolve symmetry config
+        self.alg_cfg = resolve_symmetry_config(self.alg_cfg, self.env)
+
+        # resolve deprecated normalization config
+        if self.cfg.get("empirical_normalization") is not None:
+            warnings.warn(
+                "The `empirical_normalization` parameter is deprecated. Please set `actor_obs_normalization` and "
+                "`critic_obs_normalization` as part of the `policy` configuration instead.",
+                DeprecationWarning,
+            )
+            if self.policy_cfg.get("actor_obs_normalization") is None:
+                self.policy_cfg["actor_obs_normalization"] = self.cfg["empirical_normalization"]
+            if self.policy_cfg.get("critic_obs_normalization") is None:
+                self.policy_cfg["critic_obs_normalization"] = self.cfg["empirical_normalization"]
+
+        # initialize the actor-critic
+        actor_critic_class = eval(self.policy_cfg.pop("class_name"))
+        actor_critic: ActorCritic | ActorCriticRecurrent = actor_critic_class(
+            obs, self.cfg["obs_groups"], self.env.num_actions, **self.policy_cfg
+        ).to(self.device)
+
+        # initialize the algorithm
+        alg_class = eval(self.alg_cfg.pop("class_name"))
+        alg: PPO = alg_class(actor_critic, device=self.device, **self.alg_cfg, multi_gpu_cfg=self.multi_gpu_cfg)
+
+        # initialize the storage
+        alg.init_storage(
+            "rl",
+            self.env.num_envs,
+            self.num_steps_per_env,
+            obs,
+            [self.env.num_actions],
+        )
+
+        return alg
+
+    def _prepare_logging_writer(self):
+        """Prepares the logging writers."""
+        if self.log_dir is not None and self.writer is None and not self.disable_logs:
+            # Launch either Tensorboard or Neptune & Tensorboard summary writer(s), default: Tensorboard.
+            self.logger_type = self.cfg.get("logger", "tensorboard")
+            self.logger_type = self.logger_type.lower()
+
+            if self.logger_type == "neptune":
+                from rsl_rl.utils.neptune_utils import NeptuneSummaryWriter
+
+                self.writer = NeptuneSummaryWriter(log_dir=self.log_dir, flush_secs=10, cfg=self.cfg)
+                self.writer.log_config(self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg)
+            elif self.logger_type == "wandb":
+                from rsl_rl.utils.wandb_utils import WandbSummaryWriter
+
+                self.writer = WandbSummaryWriter(log_dir=self.log_dir, flush_secs=10, cfg=self.cfg)
+                self.writer.log_config(self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg)
+            elif self.logger_type == "tensorboard":
+                from torch.utils.tensorboard import SummaryWriter
+
+                self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
+            else:
+                raise ValueError("Logger type not found. Please choose 'neptune', 'wandb' or 'tensorboard'.")
