@@ -15,6 +15,7 @@ from robot_rl.modules import (
     ActorCritic,
     ActorCriticRecurrent,
     ActorCriticEstimator,
+    ActorCriticMHA,
     EmpiricalNormalization,
     StudentTeacher,
     StudentTeacherRecurrent,
@@ -92,7 +93,7 @@ class OnPolicyRunner:
 
         # evaluate the policy class
         policy_class = eval(self.policy_cfg.pop("class_name"))
-        policy: ActorCritic | ActorCriticRecurrent | ActorCriticEstimator | StudentTeacher | StudentTeacherRecurrent = (
+        policy: ActorCritic | ActorCriticRecurrent | ActorCriticEstimator | StudentTeacher | StudentTeacherRecurrent | ActorCriticMHA = (
             policy_class(
                 num_obs,
                 num_privileged_obs,

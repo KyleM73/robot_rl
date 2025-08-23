@@ -17,6 +17,17 @@ class RobotRlActorCriticCfg(RslRlPpoActorCriticCfg):
     estimator_index: int = -1
     oracle: bool = False
 
+@configclass
+class ActorCriticMHACfg(RslRlPpoActorCriticCfg):
+    class_name: str = "ActorCriticMHA"
+    n_heads: int = MISSING
+    n_latent: int = MISSING
+    n_channels: int = MISSING
+    kernel_size: int = MISSING
+    dropout: float = 0.0
+    n_rows: int = MISSING
+    n_cols: int = MISSING
+
 
 @configclass
 class SAECfg:
