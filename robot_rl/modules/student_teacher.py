@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal
 
-from rsl_rl.utils import resolve_nn_activation
+from robot_rl.networks import MLP, EmpiricalNormalization
 
 
 class StudentTeacher(nn.Module):
@@ -35,7 +35,7 @@ class StudentTeacher(nn.Module):
                 + str([key for key in kwargs.keys()])
             )
         super().__init__()
-        activation = resolve_nn_activation(activation)
+
         self.loaded_teacher = False  # indicates if teacher has been loaded
 
         # get the observation dimensions
@@ -50,28 +50,19 @@ class StudentTeacher(nn.Module):
             num_teacher_obs += obs[obs_group].shape[-1]
 
         # student
-        student_layers = []
-        student_layers.append(nn.Linear(mlp_input_dim_s, student_hidden_dims[0]))
-        student_layers.append(activation)
-        for layer_index in range(len(student_hidden_dims)):
-            if layer_index == len(student_hidden_dims) - 1:
-                student_layers.append(nn.Linear(student_hidden_dims[layer_index], num_actions))
-            else:
-                student_layers.append(nn.Linear(student_hidden_dims[layer_index], student_hidden_dims[layer_index + 1]))
-                student_layers.append(activation)
-        self.student = nn.Sequential(*student_layers)
+        self.student = MLP(num_student_obs, num_actions, student_hidden_dims, activation)
+
+        # student observation normalization
+        self.student_obs_normalization = student_obs_normalization
+        if student_obs_normalization:
+            self.student_obs_normalizer = EmpiricalNormalization(num_student_obs)
+        else:
+            self.student_obs_normalizer = torch.nn.Identity()
+
+        print(f"Student MLP: {self.student}")
 
         # teacher
-        teacher_layers = []
-        teacher_layers.append(nn.Linear(mlp_input_dim_t, teacher_hidden_dims[0]))
-        teacher_layers.append(activation)
-        for layer_index in range(len(teacher_hidden_dims)):
-            if layer_index == len(teacher_hidden_dims) - 1:
-                teacher_layers.append(nn.Linear(teacher_hidden_dims[layer_index], num_actions))
-            else:
-                teacher_layers.append(nn.Linear(teacher_hidden_dims[layer_index], teacher_hidden_dims[layer_index + 1]))
-                teacher_layers.append(activation)
-        self.teacher = nn.Sequential(*teacher_layers)
+        self.teacher = MLP(num_teacher_obs, num_actions, teacher_hidden_dims, activation)
         self.teacher.eval()
 
         # teacher observation normalization
