@@ -13,19 +13,19 @@ from robot_rl.utils import split_and_pad_trajectories
 class RolloutStorage:
     class Transition:
         def __init__(self):
-            self.observations = None
-            self.privileged_observations = None
-            self.actions = None
-            self.privileged_actions = None
-            self.rewards = None
-            self.dones = None
-            self.values = None
-            self.actions_log_prob = None
-            self.action_mean = None
-            self.action_sigma = None
-            self.hidden_states = None
-            self.rnd_state = None
-            self.estimate_observations = None
+            self.observations: torch.Tensor | None = None
+            self.privileged_observations: torch.Tensor | None = None
+            self.actions: torch.Tensor | None = None
+            self.privileged_actions: torch.Tensor | None = None
+            self.rewards: torch.Tensor | None = None
+            self.dones: torch.Tensor | None = None
+            self.values: torch.Tensor | None = None
+            self.actions_log_prob: torch.Tensor | None = None
+            self.action_mean: torch.Tensor | None = None
+            self.action_sigma: torch.Tensor | None = None
+            self.hidden_states: torch.Tensor | None = None
+            self.rnd_state: torch.Tensor | None = None
+            self.estimate_observations: torch.Tensor | None = None
 
         def clear(self):
             self.__init__()
@@ -263,7 +263,7 @@ class RolloutStorage:
                     None,
                 ), None, rnd_state_batch, estimate_batch
 
-    # for reinfrocement learning with recurrent networks
+    # for reinforcement learning with recurrent networks
     def recurrent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
         if self.training_type != "rl":
             raise ValueError("This function is only available for reinforcement learning training.")

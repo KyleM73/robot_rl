@@ -1,5 +1,5 @@
 from dataclasses import MISSING, fields
-from typing import TypeVar
+from typing import Optional, TypeVar, Literal
 
 from isaaclab.utils import configclass
 
@@ -10,6 +10,32 @@ from isaaclab_rl.rsl_rl import (
 )
 
 RunnerCfg = TypeVar("RunnerCfg", bound=RslRlOnPolicyRunnerCfg)
+
+# -- DMO
+
+@configclass
+class DMOAlgorithmCfg(RslRlPpoAlgorithmCfg):
+    class_name = "DMO"
+    mode: Literal["bptt", "shac"] = "shac"
+    actor_lr: Optional[float] = None
+    dynamics_lr: Optional[float] = None
+    critic_lr: Optional[float] = None
+    entropy_lr: Optional[float] = None
+
+
+@configclass
+class DMOActorCriticCfg(RslRlPpoActorCriticCfg):
+    class_name = "ActorCriticDMO"
+    dynamics_hidden_dims: list[int] = MISSING
+    mode: Literal["bptt", "shac"] = "shac"
+    init_temperature: float = MISSING
+
+
+@configclass
+class DMORunnerCfg(RslRlOnPolicyRunnerCfg):
+    empirical_normalization = False
+    policy: DMOActorCriticCfg = MISSING
+    algorithm: DMOAlgorithmCfg = MISSING
 
 
 @configclass

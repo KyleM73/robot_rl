@@ -6,9 +6,11 @@
 """Implementation of runners for environment-agent interaction."""
 
 from .on_policy_runner import OnPolicyRunner
+from .dmo_runner import DMORunner
 from .probe_runner import ProbeRunner
 
 __all__ = [
     "OnPolicyRunner",
+    "DMORunner",
     "ProbeRunner",
 ]
