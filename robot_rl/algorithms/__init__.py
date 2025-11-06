@@ -5,8 +5,9 @@
 
 """Implementation of different RL agents."""
 
+from.add import ADD
 from .distillation import Distillation
 from .ppo import PPO
 from .probe_alg import ProbeAlg
 
-__all__ = ["PPO", "ProbeAlg", "Distillation"]
+__all__ = ["ADD", "PPO", "ProbeAlg", "Distillation"]

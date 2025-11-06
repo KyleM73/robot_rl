@@ -13,6 +13,26 @@ RunnerCfg = TypeVar("RunnerCfg", bound=RslRlOnPolicyRunnerCfg)
 
 
 @configclass
+class RobotRlActorCriticDiscriminatorCfg(RslRlPpoActorCriticCfg):
+    class_name: str = "ActorCriticDiscriminator"
+    discriminator_obs_normalization: bool = MISSING
+    discriminator_hidden_dims: list[int] = MISSING
+
+
+@configclass
+class RobotRlAddAlgorithmCfg(RslRlPpoAlgorithmCfg):
+    class_name: str = "ADD"
+    gp_coef: float = MISSING
+
+@configclass
+class RobotRlAddRunnerCfg(RslRlOnPolicyRunnerCfg):
+    class_name: str = "OnPolicyADDRunner"
+    policy: RobotRlActorCriticDiscriminatorCfg = MISSING
+    algorithm: RobotRlAddAlgorithmCfg = MISSING
+
+
+
+@configclass
 class RobotRlActorCriticCfg(RslRlPpoActorCriticCfg):
     estimator_index: int = -1
     oracle: bool = False
