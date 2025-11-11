@@ -19,7 +19,7 @@ from robot_rl.modules import (
     resolve_rnd_config,
     resolve_symmetry_config,
 )
-from robot_rl.utils import resolve_obs_groups, store_code_state
+from robot_rl.utils import resolve_obs_groups, store_code_state, resolve_estimator_config
 
 
 class OnPolicyRunner:

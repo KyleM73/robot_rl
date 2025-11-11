@@ -7,7 +7,7 @@ import torch.optim as optim
 from tensordict import TensorDict
 from itertools import chain
 
-from robot_rl.modules import ActorCritic, ActorCriticEstimator, ActorCriticRecurrent, ActorCriticMHA
+from robot_rl.modules import ActorCritic, ActorCriticRecurrent
 from robot_rl.modules.rnd import RandomNetworkDistillation
 from robot_rl.storage import RolloutStorage
 from robot_rl.utils import string_to_callable
@@ -16,12 +16,12 @@ from robot_rl.utils import string_to_callable
 class PPO:
     """Proximal Policy Optimization algorithm (https://arxiv.org/abs/1707.06347)."""
 
-    policy: ActorCritic | ActorCriticRecurrent | ActorCriticMHA | ActorCriticEstimator
+    policy: ActorCritic | ActorCriticRecurrent
     """The actor critic module."""
 
     def __init__(
         self,
-        policy: ActorCritic | ActorCriticRecurrent | ActorCriticMHA | ActorCriticEstimator,
+        policy: ActorCritic | ActorCriticRecurrent,
         num_learning_epochs: int = 5,
         num_mini_batches: int = 4,
         clip_param: float = 0.2,

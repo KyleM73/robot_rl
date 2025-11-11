@@ -302,3 +302,18 @@ def resolve_obs_groups(
     print("-" * 80)
 
     return obs_groups
+
+
+def resolve_estimator_config(alg_cfg: dict) -> tuple[dict, bool]:
+    """Resolve the estimator configuration.
+
+    Args:
+        alg_cfg: The algorithm configuration dictionary.
+
+    Returns:
+        A tuple containing the resolved algorithm configuration dictionary and whether the last observations
+        should be used (i.e. if estimate_next_obs is True)
+    """
+    alg_cfg["estimator"] = bool(alg_cfg.get("estimator_cfg") is not None)
+    use_last_obs = bool(alg_cfg["estimator"] and alg_cfg["estimator_cfg"]["estimate_next_obs"])
+    return alg_cfg, use_last_obs
