@@ -16,9 +16,6 @@ from robot_rl.env import VecEnv
 from robot_rl.modules import (
     ActorCritic,
     ActorCriticRecurrent,
-    ActorCriticEstimator,
-    ActorCriticMHA,
-    resolve_estimator_config,
     resolve_rnd_config,
     resolve_symmetry_config,
 )
