@@ -238,6 +238,20 @@ class OnPolicyRunner:
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar("Perf/collection time", locs["collection_time"], locs["it"])
         self.writer.add_scalar("Perf/learning_time", locs["learn_time"], locs["it"])
+        # -- GPU Performance
+        for gpu_i in range(self.gpu_world_size):
+            mem_allocated = torch.cuda.memory_allocated(gpu_i)
+            mem_reserved = torch.cuda.memory_reserved(gpu_i)
+            total_mem = torch.cuda.get_device_properties(gpu_i).total_memory
+            max_mem_allocated = torch.cuda.max_memory_allocated(gpu_i)
+            max_mem_reserved = torch.cuda.max_memory_reserved(gpu_i)
+
+            self.writer.add_scalar(f"Perf/gpu.{gpu_i}/mem_allocated_GB", mem_allocated / 1e9, locs["it"])
+            self.writer.add_scalar(f"Perf/gpu.{gpu_i}/mem_reserved_GB", mem_reserved / 1e9, locs["it"])
+            self.writer.add_scalar(f"Perf/gpu.{gpu_i}/mem_allocated_pct", mem_allocated / total_mem, locs["it"])
+            self.writer.add_scalar(f"Perf/gpu.{gpu_i}/mem_reserved_pct", mem_reserved / total_mem, locs["it"])
+            self.writer.add_scalar(f"Perf/gpu.{gpu_i}/max_mem_allocated_GB", max_mem_allocated / 1e9, locs["it"])
+            self.writer.add_scalar(f"Perf/gpu.{gpu_i}/max_mem_reserved_GB", max_mem_reserved / 1e9, locs["it"])
 
         # -- Training
         if len(locs["rewbuffer"]) > 0:
